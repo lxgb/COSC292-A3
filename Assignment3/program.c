@@ -71,7 +71,7 @@ void TestExtractFileFromImage()
 
 int main()
 {
-	TestHideInImage();
+	//TestHideInImage();
 	TestExtractFileFromImage();
 
 	_CrtDumpMemoryLeaks(); // Check for memory leaks

@@ -144,76 +144,96 @@ void WriteImage(IMAGE* imgPtr, FILE* outfile)
 
 void HideInImage(IMAGE* imgPtr, FILE* filePtr)
 {
-	PIXEL* currentPixel = imgPtr->bmData;
-	BYTE padding = imgPtr->bmHDR->lWidth % 4;
-	BYTE byteToHide = 0;
-	int i = 0;
+	if (!imgPtr || !imgPtr->bmData || !imgPtr->bmHDR || !filePtr)
+		return;
 
-	// Check if the image is large enough to hold the hidden data
-	while (fread(&byteToHide, sizeof(BYTE), 1, filePtr) == 1)
+	// Get image dimensions and calculate row padding
+	int width = imgPtr->bmHDR->lWidth;
+	int height = imgPtr->bmHDR->lHeight;
+	int rowSize = width * sizeof(PIXEL);
+	int padding = (4 - (rowSize % 4)) % 4;
+
+	BYTE* pixelData = (BYTE*)imgPtr->bmData;
+
+	// Use the helper to get file size
+	unsigned int fileSize = GetFileSize(filePtr);
+	imgPtr->bmHDR->dwClrImportant = fileSize;  // Store the size for later extraction
+
+	// Check if the image has enough pixels to hide the file
+	int totalPixels = width * height;
+	if (fileSize > totalPixels)
+		return;  // Not enough space to hide the file
+
+	BYTE byteToHide = 0;
+	unsigned int byteIndex = 0;
+
+	// Loop through each pixel and embed one byte per pixel
+	for (int y = 0; y < height && byteIndex < fileSize; y++)
 	{
-		for (int j = 0; j < 8; j++)
+		PIXEL* row = (PIXEL*)(pixelData + y * (rowSize + padding));
+		for (int x = 0; x < width && byteIndex < fileSize; x++)
 		{
-			// Check if we have reached the end of the image data
-			if (i >= imgPtr->bmHDR->dwImageSize)
-			{
+			if (fread(&byteToHide, sizeof(BYTE), 1, filePtr) != 1)
 				break;
-			}
-			// Hide the byte in the pixel
-			currentPixel->bBlu = (currentPixel->bBlu & 0xF0) | ((byteToHide >> (7 - j)) & 0x0F);
-			currentPixel++;
-			i++;
-			if (i % imgPtr->bmHDR->lWidth == 0)
-			{
-				currentPixel = (PIXEL*)(((BYTE*)currentPixel) + padding);
-			}
+
+			BYTE blueBits = (byteToHide & 0xF0) >> 4;  // Top 4 bits
+			BYTE greenBits = (byteToHide & 0x0C) >> 2;  // Middle 2 bits
+			BYTE redBits = (byteToHide & 0x03);       // Bottom 2 bits
+
+			row[x].bBlu = (row[x].bBlu & 0xF0) | blueBits;
+			row[x].bGrn = (row[x].bGrn & 0xFC) | greenBits;
+			row[x].bRed = (row[x].bRed & 0xFC) | redBits;
+
+			byteIndex++;
 		}
 	}
 }
 
 void ExtractFileFromImage(IMAGE* imgPtr, FILE* filePtr)
 {
-	// Check if the image pointer and file pointer are valid
+	// Validate inputs
 	if (!imgPtr || !imgPtr->bmData || !imgPtr->bmHDR || !filePtr)
 		return;
 
-	// Check if the image is large enough to hold the hidden data
+	// Get image dimensions and calculate padding
 	int width = imgPtr->bmHDR->lWidth;
 	int height = imgPtr->bmHDR->lHeight;
 	int rowSize = width * sizeof(PIXEL);
 	int padding = (4 - (rowSize % 4)) % 4;
 
-	// Calculate the size of the hidden data
+	// Get size of hidden file from the header
+	unsigned int fileSize = imgPtr->bmHDR->dwClrImportant;
+
+	// Allocate buffer for hidden file
+	BYTE* buffer = (BYTE*)malloc(fileSize);
+	if (!buffer)
+		return;
+
 	BYTE* pixelData = (BYTE*)imgPtr->bmData;
-	BYTE byteToWrite = 0;
-	int bitIndex = 0;
+	unsigned int byteIndex = 0;
 
-	// Read the hidden data from the image
-	for (int y = 0; y < height; y++)
+	// Iterate through the pixels row by row
+	for (int i = 0; i < height && byteIndex < fileSize; i++)
 	{
-		PIXEL* row = (PIXEL*)(pixelData + y * (rowSize + padding)); // Adjust for padding
-		// Read each pixel in the row
-		for (int x = 0; x < width; x++)
+		PIXEL* row = (PIXEL*)(pixelData + i * (rowSize + padding));
+		for (int j = 0; j < width && byteIndex < fileSize; j++)
 		{
-			// Extract the bits from the pixel
-			byteToWrite |= ((row[x].bBlu & 0x01) << (7 - bitIndex));
+			PIXEL pixel = row[j];
 
-			bitIndex++;
-			if (bitIndex == 8)
-			{
-				fwrite(&byteToWrite, sizeof(BYTE), 1, filePtr);
-				byteToWrite = 0;
-				bitIndex = 0;
-			}
+			BYTE blueBits = (pixel.bBlu & 0x0F) << 4;  // Lower 4 bits from blue
+			BYTE greenBits = (pixel.bGrn & 0x03) << 2;  // Lower 2 bits from green
+			BYTE redBits = (pixel.bRed & 0x03);       // Lower 2 bits from red
+
+			BYTE hiddenByte = blueBits | greenBits | redBits;
+			buffer[byteIndex++] = hiddenByte;
 		}
 	}
 
-	// Handle any remaining bits
-	if (bitIndex != 0)
-	{
-		fwrite(&byteToWrite, sizeof(BYTE), 1, filePtr);
-	}
+	// Write the extracted data to file
+	fwrite(buffer, sizeof(BYTE), fileSize, filePtr);
+	free(buffer);
 }
+
 
 unsigned int GetFileSize(FILE* filePtr)
 {
